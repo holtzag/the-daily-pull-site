@@ -21,6 +21,16 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Verify private repository token is configured
+        env:
+          PRIVATE_SOURCE_TOKEN: ${{ secrets.PRIVATE_SOURCE_TOKEN }}
+        run: |
+          if [ -z "$PRIVATE_SOURCE_TOKEN" ]; then
+            echo "::error::PRIVATE_SOURCE_TOKEN is empty or unavailable. Update the repository Actions secret with the token value."
+            exit 1
+          fi
+          echo "Private source token is present (value hidden)."
+
       - name: Check out private game source
         uses: actions/checkout@v4
         with:
