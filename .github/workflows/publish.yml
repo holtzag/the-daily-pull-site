@@ -34,9 +34,11 @@ jobs:
             hour:'2-digit',minute:'2-digit',hourCycle:'h23'
           }).formatToParts(now).filter(x=>x.type!=='literal').map(x=>[x.type,x.value]));
           const scheduled = process.env.GITHUB_EVENT_NAME === 'schedule';
-          const inWindow = parts.hour === '23' && Number(parts.minute) >= 45;
-          const publish = !scheduled || inWindow;
-          const next = new Date(Date.UTC(Number(parts.year),Number(parts.month)-1,Number(parts.day)+1));
+          const beforeMidnight = parts.hour === '23' && Number(parts.minute) >= 45;
+          const slightlyLate = parts.hour === '00' && Number(parts.minute) <= 30;
+          const publish = !scheduled || beforeMidnight || slightlyLate;
+          const dayOffset = beforeMidnight || !scheduled ? 1 : 0;
+          const next = new Date(Date.UTC(Number(parts.year),Number(parts.month)-1,Number(parts.day)+dayOffset));
           const date = next.toISOString().slice(0,10);
           const zip = date.slice(5,7)+date.slice(8,10)+date.slice(2,4)+'.zip';
           console.log('publish='+publish);
