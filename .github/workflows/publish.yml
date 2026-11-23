@@ -3,7 +3,10 @@ name: Publish The Daily Pull beta
 on:
   workflow_dispatch:
   schedule:
-    - cron: '15 6 * * *'
+    # 11:50 PM Pacific: 06:50 UTC during PDT, 07:50 UTC during PST.
+    # The timezone gate below ensures only the matching schedule deploys.
+    - cron: '50 6 * * *'
+    - cron: '50 7 * * *'
 
 permissions:
   contents: read
@@ -12,23 +15,47 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.release.outputs.publish }}
     steps:
+      - name: Determine Pacific release date
+        id: release
+        shell: bash
+        run: |
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const now = new Date();
+          const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/Los_Angeles', year:'numeric',month:'2-digit',day:'2-digit',
+            hour:'2-digit',minute:'2-digit',hourCycle:'h23'
+          }).formatToParts(now).filter(x=>x.type!=='literal').map(x=>[x.type,x.value]));
+          const scheduled = process.env.GITHUB_EVENT_NAME === 'schedule';
+          const inWindow = parts.hour === '23' && Number(parts.minute) >= 45;
+          const publish = !scheduled || inWindow;
+          const next = new Date(Date.UTC(Number(parts.year),Number(parts.month)-1,Number(parts.day)+1));
+          const date = next.toISOString().slice(0,10);
+          const zip = date.slice(5,7)+date.slice(8,10)+date.slice(2,4)+'.zip';
+          console.log('publish='+publish);
+          console.log('date='+date);
+          console.log('zip='+zip);
+          NODE
+
       - name: Verify private repository token is configured
+        if: steps.release.outputs.publish == 'true'
         env:
           PRIVATE_SOURCE_TOKEN: ${{ secrets.PRIVATE_SOURCE_TOKEN }}
         run: |
           if [ -z "$PRIVATE_SOURCE_TOKEN" ]; then
-            echo "::error::PRIVATE_SOURCE_TOKEN is empty or unavailable. Update the repository Actions secret with the token value."
+            echo "::error::PRIVATE_SOURCE_TOKEN is empty or unavailable."
             exit 1
           fi
-          echo "Private source token is present (value hidden)."
 
-      - name: Check out private game source
+      - name: Check out private source for manual full publishing
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/checkout@v4
         with:
           repository: holtzag/the-daily-pull
@@ -37,29 +64,63 @@ jobs:
           path: game
           persist-credentials: false
 
+      - name: Check out only the upcoming puzzle and website source
+        if: github.event_name == 'schedule' && steps.release.outputs.publish == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: holtzag/the-daily-pull
+          ref: main
+          token: ${{ secrets.PRIVATE_SOURCE_TOKEN }}
+          path: game
+          persist-credentials: false
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /src/
+            /public/
+            /scripts/
+            /index.html
+            /package.json
+            /package-lock.json
+            /vite.config.js
+            /puzzles/${{ steps.release.outputs.zip }}
+            /puzzles/hint-cache.json
+
       - name: Set up Node
+        if: steps.release.outputs.publish == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
+      - name: Restore released puzzle archive for scheduled publish
+        if: github.event_name == 'schedule' && steps.release.outputs.publish == 'true'
+        working-directory: game
+        env:
+          DAILY_PUZZLE_DATE: ${{ steps.release.outputs.date }}
+        run: node scripts/restore-published-puzzles.mjs
+
       - name: Install and build website
+        if: steps.release.outputs.publish == 'true'
         working-directory: game
         env:
           GITHUB_PAGES_BASE: /the-daily-pull-site/
-          PUBLISH_ALL_PUZZLES: 'true'
+          DAILY_PUZZLE_DATE: ${{ github.event_name == 'schedule' && steps.release.outputs.date || '' }}
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           npm run build
 
       - name: Configure GitHub Pages
+        if: steps.release.outputs.publish == 'true'
         uses: actions/configure-pages@v5
 
-      - name: Upload only the built website and puzzle assets
+      - name: Upload built website and released puzzle assets
+        if: steps.release.outputs.publish == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: game/dist
 
   deploy:
+    if: needs.build.outputs.publish == 'true'
     needs: build
     runs-on: ubuntu-latest
     environment:
