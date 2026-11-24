@@ -105,7 +105,7 @@ jobs:
         if: steps.release.outputs.publish == 'true'
         working-directory: game
         env:
-          GITHUB_PAGES_BASE: /the-daily-pull-site/
+          GITHUB_PAGES_BASE: /
           DAILY_PUZZLE_DATE: ${{ github.event_name == 'schedule' && steps.release.outputs.date || '' }}
         run: |
           npm ci --no-audit --no-fund
